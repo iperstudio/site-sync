@@ -1,7 +1,7 @@
 # Site Sync
 
 Interactive PHP CLI for syncing project directories over SSH with rsync. Designed
-for Kirby content and accounts, it also works with other projects without depending
+for Kirby content, accounts and logs, it also works with other projects without depending
 on Kirby.
 
 ## Requirements
@@ -34,7 +34,7 @@ The setup wizard asks for:
 
 - Whether to configure production and staging (either or both).
 - SSH host or IP, SSH user and remote project directory for each selected environment.
-- Separate local and remote paths for content and accounts.
+- Separate local and remote paths for content, accounts and logs.
 - Whether to add Composer shortcuts (defaults to `yes` when `composer.json` exists).
 
 It previews the configuration before saving `site-sync.php`. Use
@@ -66,6 +66,7 @@ vendor/bin/site-sync init
 vendor/bin/site-sync init --edit
 vendor/bin/site-sync pull production content
 vendor/bin/site-sync pull production accounts
+vendor/bin/site-sync pull production logs
 vendor/bin/site-sync push production content
 vendor/bin/site-sync push production accounts
 vendor/bin/site-sync pull staging content
@@ -99,12 +100,31 @@ return [
     'paths' => [
         'content' => ['local' => 'content', 'remote' => 'content'],
         'accounts' => ['local' => 'site/accounts', 'remote' => 'site/accounts'],
+        'logs' => ['local' => 'site/logs', 'remote' => 'site/logs'],
     ],
 ];
 ```
 
 Replace the example host and directory with your server settings. Add other named
 paths manually, then use them as the command's final argument.
+
+The `logs` defaults are `site/logs` locally and remotely, matching the standard
+location used by [KirbyLog](https://github.com/johannschopplich/kirbylog#readme).
+Override either path in the wizard or in `site-sync.php` if your Kirby roots or
+KirbyLog's `johannschopplich.kirbylog.dir` option use a different directory.
+Site Sync does not install or load KirbyLog; it synchronizes the configured files.
+
+For existing projects, run `composer sync init -- --edit` (or
+`vendor/bin/site-sync init --edit`) to add the logs paths and accept the Composer
+shortcuts. You can then use `composer pull-staging-logs`,
+`composer pull-production-logs` for the environments you configured.
+
+Logs support **pull only** and do not use `--delete`: files downloaded earlier
+remain locally even after the server removes or rotates them. Files with matching
+names are updated from the server; their contents are not concatenated. For example,
+an active daily log can be downloaded again as new entries arrive. Use separate
+local directories when collecting logs from servers with identical filenames.
+The CLI rejects `push ... logs`, including through an old Composer shortcut.
 
 Paths must be relative subdirectories without `..`. Local paths and symlinks must
 resolve inside the project. Environments are production and staging; either can
@@ -121,10 +141,12 @@ commit shared server/path settings if appropriate for the project.
 
 `pull` downloads remote directory contents into the local directory. `push`
 uploads local contents into the corresponding remote directory. Both use rsync
-archive mode, one filesystem, hard links, progress, itemized changes and `--delete`.
+archive mode, one filesystem, hard links, progress and itemized changes.
 They show the project, source and destination before confirmation.
 
-**Files absent from the source are deleted at the destination.** Preview changes
+For content, accounts and other custom paths, **files absent from the source are
+deleted at the destination** (`--delete`). Logs pulls preserve local files absent
+from the server. Preview changes
 with `--dry-run` before synchronizing.
 
 - Normal operations require `yes`.
@@ -157,6 +179,7 @@ composer pull-staging-content -- --dry-run
 
 Pass options after `--` so Composer forwards them to Site Sync. Production
 shortcuts are generated only when production is configured, and likewise for staging.
+For `logs`, only pull shortcuts are generated.
 Custom path names containing characters other than letters, digits, underscores
 or hyphens can be used through `composer sync` but do not get named shortcuts.
 

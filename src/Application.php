@@ -77,13 +77,14 @@ Site Sync — content synchronization over SSH using rsync
   site-sync pull staging|production TYPE [--dry-run] [--project=PATH]
   site-sync push staging|production TYPE [--dry-run] [--project=PATH]
 
-TYPE is a configured path name, such as content or accounts.
+TYPE is a configured path name, such as content, accounts or logs.
 The directory containing site-sync.php is the project root.
 Without --project, synchronization searches the current directory and its parents.
 init creates a config in the current directory; --edit finds an existing config.
 init offers Composer shortcuts when composer.json exists; aliases adds them later.
 Dry runs preview changes without modifying files or requiring confirmation.
-Actual synchronization uses --delete: destination files absent from the source are removed.
+Content and accounts use --delete: destination files absent from the source are removed.
+Logs support pull only, preserve local files absent from the server and update matching files.
 Production pushes require "yes yes yes"; other operations require "yes".
 
 HELP;
@@ -188,7 +189,7 @@ HELP;
                     echo "Skipping shortcuts for path name: {$type}. Use composer sync instead.\n";
                     continue;
                 }
-                foreach (['pull', 'push'] as $direction) {
+                foreach ($type === 'logs' ? ['pull'] : ['pull', 'push'] as $direction) {
                     $shortcuts["{$direction}-{$environment}-{$type}"] = "site-sync {$direction} {$environment} " . escapeshellarg((string) $type);
                 }
             }
@@ -245,7 +246,7 @@ HELP;
             throw new RuntimeException('Configure at least one environment: production or staging.');
         }
         $paths = $existing['paths'] ?? [];
-        foreach (['content' => 'content', 'accounts' => 'site/accounts'] as $name => $default) {
+        foreach (['content' => 'content', 'accounts' => 'site/accounts', 'logs' => 'site/logs'] as $name => $default) {
             $old = $paths[$name] ?? ['local' => $default, 'remote' => $default];
             $local = $this->ask("{$name}: local path", $old['local']);
             $remote = $this->ask("{$name}: remote path", $old['remote']);
@@ -341,6 +342,9 @@ HELP;
         if (!in_array($environment, ['production', 'staging'], true)) {
             throw new RuntimeException('Environment must be production or staging.');
         }
+        if ($type === 'logs' && $direction === 'push') {
+            throw new RuntimeException('Logs support pull only. Uploading local logs could overwrite server logs.');
+        }
         $root = $this->root($options, true);
         $config = $this->read($root);
         $server = $config['environments'][$environment] ?? null;
@@ -366,7 +370,14 @@ HELP;
         $source = $direction === 'push' ? $local . '/' : $remoteDisplay;
         $destination = $direction === 'push' ? $remoteDisplay : $local . '/';
         echo "Project: {$root}\n{$direction} {$environment} {$type}\nSource: {$source}\nDestination: {$destination}\n";
-        echo $dryRun ? "Preview only (--dry-run).\n" : "Files absent from source will be deleted at destination (--delete).\n";
+        if ($dryRun) {
+            echo "Preview only (--dry-run).\n";
+        }
+        if ($type === 'logs') {
+            echo "Local logs absent from the server will be preserved; matching files will be updated.\n";
+        } elseif (!$dryRun) {
+            echo "Files absent from source will be deleted at destination (--delete).\n";
+        }
         if ($direction === 'pull' && !is_dir($local)) {
             echo "Local destination directory will be created when the pull is confirmed.\n";
         }
@@ -396,7 +407,10 @@ HELP;
             }
             $rsyncLocal = $previewDirectory;
         }
-        $command = ['rsync', '-axHv', '--itemize-changes', '--progress', '--delete'];
+        $command = ['rsync', '-axHv', '--itemize-changes', '--progress'];
+        if ($type !== 'logs') {
+            $command[] = '--delete';
+        }
         if ($dryRun) {
             $command[] = '--dry-run';
         }

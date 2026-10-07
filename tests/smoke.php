@@ -119,34 +119,37 @@ MOCK);
     };
 
     ok($run(['--help']));
-    $answers = implode("\n", ['yes', '127.0.0.1', '', 'example.test', 'no', 'content with spaces', 'remote content', '', '', 'yes']) . "\n";
+    $answers = implode("\n", ['yes', '127.0.0.1', '', 'example.test', 'no', 'content with spaces', 'remote content', '', '', '', '', 'yes']) . "\n";
     ok($run(['init'], $answers));
     $config = $project . '/site-sync.php';
     $original = file_get_contents($config);
+    $generatedConfig = require $config;
+    check($generatedConfig['paths']['logs'] === ['local' => 'site/logs', 'remote' => 'site/logs'], 'KirbyLog defaults are incorrect.');
     check(str_contains($original, "'staging' => null"), 'Staging should be optional.');
     check(str_contains($original, 'return [') && !str_contains($original, 'array ('), 'Configuration must use short array syntax.');
     check($run(['init'])['code'] === 1, 'init must not overwrite configuration.');
     check(file_get_contents($config) === $original, 'init modified existing configuration.');
-    ok($run(['init', '--edit'], str_repeat("\n", 9) . "no\n"));
+    ok($run(['init', '--edit'], str_repeat("\n", 11) . "no\n"));
     check(file_get_contents($config) === $original, 'Declined edit changed configuration.');
-    ok($run(['init', '--edit'], str_repeat("\n", 9) . "yes\n"));
+    ok($run(['init', '--edit'], str_repeat("\n", 11) . "yes\n"));
     check(file_get_contents($config) === $original, 'Defaults did not preserve configuration.');
     $legacyConfig = require $config;
+    unset($legacyConfig['paths']['logs']);
     file_put_contents($config, "<?php return " . var_export($legacyConfig, true) . ";\n");
-    ok($run(['init', '--edit'], str_repeat("\n", 9) . "yes\n"));
-    check(file_get_contents($config) === $original, 'Editing a legacy array() config did not preserve values in short array format.');
-    ok($run(['init', '--edit'], str_repeat("\n", 4) . "yes\n127.0.0.2\n\nstaging.test\n" . str_repeat("\n", 4) . "yes\n"));
+    ok($run(['init', '--edit'], str_repeat("\n", 11) . "yes\n"));
+    check(file_get_contents($config) === $original, 'Editing a legacy config must preserve values, add logs defaults and use short arrays.');
+    ok($run(['init', '--edit'], str_repeat("\n", 4) . "yes\n127.0.0.2\n\nstaging.test\n" . str_repeat("\n", 6) . "yes\n"));
     // A staging-only project can be created, edited and synchronized without production.
     $stagingProject = $base . '/staging-only';
     mkdir($stagingProject);
-    $stagingAnswers = implode("\n", ['no', 'yes', '127.0.0.2', '', 'staging.test', '', '', '', '', 'yes']) . "\n";
+    $stagingAnswers = implode("\n", ['no', 'yes', '127.0.0.2', '', 'staging.test', '', '', '', '', '', '', 'yes']) . "\n";
     ok($run(['init'], $stagingAnswers, $stagingProject));
     $stagingFile = $stagingProject . '/site-sync.php';
     $stagingConfig = require $stagingFile;
     check($stagingConfig['environments']['production'] === null, 'Production should be optional.');
     check($stagingConfig['environments']['staging']['host'] === '127.0.0.2', 'Staging-only wizard failed.');
     $stagingOriginal = file_get_contents($stagingFile);
-    ok($run(['init', '--edit'], str_repeat("\n", 9) . "yes\n", $stagingProject));
+    ok($run(['init', '--edit'], str_repeat("\n", 11) . "yes\n", $stagingProject));
     check(file_get_contents($stagingFile) === $stagingOriginal, 'Edit defaults enabled absent production.');
     mkdir($stagingProject . '/content');
     ok($run(['pull', 'staging', 'content', '--dry-run'], cwd: $stagingProject));
@@ -159,7 +162,7 @@ MOCK);
     check(file_get_contents($stagingFile) === $stagingOriginal, 'Rejected edit changed configuration.');
     check($run(['init', '--edit'], "maybe\n", $stagingProject)['code'] === 1, 'Invalid environment choice accepted.');
     check(file_get_contents($stagingFile) === $stagingOriginal, 'Invalid choice changed configuration.');
-    ok($run(['init', '--edit'], "yes\n127.0.0.1\n\nexample.test\n" . str_repeat("\n", 8) . "yes\n", $stagingProject));
+    ok($run(['init', '--edit'], "yes\n127.0.0.1\n\nexample.test\n" . str_repeat("\n", 10) . "yes\n", $stagingProject));
     $stagingConfig = require $stagingFile;
     check($stagingConfig['environments']['production']['host'] === '127.0.0.1', 'Could not add production later.');
     check($stagingConfig['environments']['staging']['host'] === '127.0.0.2', 'Adding production changed staging.');
@@ -181,39 +184,55 @@ MOCK);
     check($aliasComposer->scripts->test === 'echo original' && $aliasComposer->scripts->sync === 'echo custom sync', 'Existing scripts were replaced.');
     check($aliasComposer->scripts->{'pull-staging-content'} === 'echo custom pull', 'Conflicting shortcut was replaced.');
     check(isset($aliasComposer->scripts->{'push-staging-accounts'}) && !isset($aliasComposer->scripts->{'push-production-accounts'}), 'Shortcuts must match configured environments.');
+    check(isset($aliasComposer->scripts->{'pull-staging-logs'}) && !isset($aliasComposer->scripts->{'push-staging-logs'}, $aliasComposer->scripts->{'pull-production-logs'}), 'Log shortcuts must allow configured pulls only.');
     check(str_contains($aliasSource, "\n  \"scripts\""), 'Composer indentation was not preserved.');
     ok($run(['aliases'], cwd: $aliasProject));
     check(file_get_contents($aliasProject . '/composer.json') === $aliasSource, 'Alias generation must be idempotent.');
     // Reject malformed Composer data before changing the existing config.
     file_put_contents($aliasProject . '/composer.json', '{invalid json');
-    check($run(['init', '--edit'], str_repeat("\n", 10), $aliasProject)['code'] === 1, 'Malformed composer.json was accepted.');
+    check($run(['init', '--edit'], str_repeat("\n", 12), $aliasProject)['code'] === 1, 'Malformed composer.json was accepted.');
     check(file_get_contents($aliasProject . '/site-sync.php') === $stagingOriginal, 'Failed alias preparation changed the config.');
     check(file_get_contents($aliasProject . '/composer.json') === '{invalid json', 'Malformed JSON was overwritten.');
     // Decline aliases but still save the wizard configuration.
     file_put_contents($aliasProject . '/composer.json', $composerOriginal);
-    ok($run(['init', '--edit'], str_repeat("\n", 9) . "no\nyes\n", $aliasProject));
+    ok($run(['init', '--edit'], str_repeat("\n", 11) . "no\nyes\n", $aliasProject));
     check(file_get_contents($aliasProject . '/composer.json') === $composerOriginal, 'Wizard ignored declined aliases.');
     // Scalar strings containing PHP punctuation must survive short-array export.
     $specialRoot = "site with 'quote and [brackets] array ( and \\slash";
-    ok($run(['init', '--edit'], "no\nyes\n\n\n{$specialRoot}\n" . str_repeat("\n", 4) . "no\nyes\n", $aliasProject));
+    ok($run(['init', '--edit'], "no\nyes\n\n\n{$specialRoot}\n" . str_repeat("\n", 6) . "no\nyes\n", $aliasProject));
     $specialConfig = require $aliasProject . '/site-sync.php';
     check($specialConfig['environments']['staging']['root'] === $specialRoot, 'Array formatting changed a scalar string.');
+    ok($run(['init', '--edit'], str_repeat("\n", 9) . "local logs/files\nremote logs/files\nno\nyes\n", $aliasProject));
+    $customLogsConfig = require $aliasProject . '/site-sync.php';
+    check($customLogsConfig['paths']['logs'] === ['local' => 'local logs/files', 'remote' => 'remote logs/files'], 'Wizard did not accept separate logs overrides.');
+    ok($run(['init', '--edit'], str_repeat("\n", 11) . "no\nyes\n", $aliasProject));
+    $preservedLogsConfig = require $aliasProject . '/site-sync.php';
+    check($preservedLogsConfig['paths']['logs'] === $customLogsConfig['paths']['logs'], 'Editing reset custom log paths.');
     mkdir($project . '/content with spaces');
     mkdir($project . '/site/accounts', 0777, true);
+    mkdir($project . '/site/logs');
     $nested = $project . '/site/nested';
     mkdir($nested);
     foreach (['pull', 'push'] as $direction) {
         foreach (['production', 'staging'] as $target) {
-            foreach (['content', 'accounts'] as $name) {
+            foreach (['content', 'accounts', 'logs'] as $name) {
+                if ($name === 'logs' && $direction === 'push') {
+                    foreach ([[], ['--dry-run']] as $options) {
+                        $rejected = $run([$direction, $target, $name, ...$options], "yes yes yes\n", $nested);
+                        check($rejected['code'] === 1 && str_contains($rejected['stderr'], 'pull only'), 'Logs push should be rejected.');
+                        $notCalled();
+                    }
+                    continue;
+                }
                 $answer = $direction === 'push' && $target === 'production' ? "yes yes yes\n" : "yes\n";
                 ok($run([$direction, $target, $name], $answer, $nested));
                 $call = invocation($record);
                 check($call['cwd'] === $project, 'Project discovery failed.');
                 check($call['old_args'] === '1' && $call['protect_args'] === '0', 'Remote quoting environment is incorrect.');
-                $local = $project . '/' . ($name === 'content' ? 'content with spaces' : 'site/accounts') . '/';
+                $local = $project . '/' . (['content' => 'content with spaces', 'accounts' => 'site/accounts', 'logs' => 'site/logs'][$name]) . '/';
                 $operands = array_slice($call['args'], -2);
                 check($operands[$direction === 'push' ? 0 : 1] === $local, 'Local path or transfer direction is incorrect.');
-                check(in_array('--delete', $call['args'], true), 'Missing --delete.');
+                check(in_array('--delete', $call['args'], true) === ($name !== 'logs'), 'Deletion behavior is incorrect for this path.');
                 check(str_contains($operands[$direction === 'push' ? 1 : 0], $target === 'production' ? '127.0.0.1' : '127.0.0.2'), 'Wrong remote host.');
             }
         }
@@ -298,18 +317,34 @@ MOCK);
     file_put_contents($consumer . '/site-sync.php', $original);
     mkdir($consumer . '/content with spaces');
     mkdir($consumer . '/site/accounts', 0777, true);
+    mkdir($consumer . '/site/logs');
     // Empty response selects the default yes for Composer shortcuts.
-    ok($run(['init', '--edit'], str_repeat("\n", 10) . "yes\n", $consumer, binary: $proxy));
+    ok($run(['init', '--edit'], str_repeat("\n", 12) . "yes\n", $consumer, binary: $proxy));
     $consumerComposer = json_decode(file_get_contents($consumer . '/composer.json'), true, flags: JSON_THROW_ON_ERROR);
     check($consumerComposer['scripts']['sync'] === ['Composer\\Config::disableProcessTimeout', 'site-sync'], 'General shortcut not generated.');
     $consumerConfig = file_get_contents($consumer . '/site-sync.php');
     $consumerJson = file_get_contents($consumer . '/composer.json');
-    ok($run(['init', '--edit'], str_repeat("\n", 10) . "no\n", $consumer, binary: $proxy));
+    ok($run(['init', '--edit'], str_repeat("\n", 12) . "no\n", $consumer, binary: $proxy));
     check(file_get_contents($consumer . '/site-sync.php') === $consumerConfig && file_get_contents($consumer . '/composer.json') === $consumerJson, 'Declining save modified a project file.');
     ok(execute(['composer', 'sync', 'pull', 'production', 'content', '--', '--dry-run'], $consumer, $environment));
     check(array_slice(invocation($record)['args'], -1)[0] === $consumer . '/content with spaces/', 'General Composer shortcut selected the wrong project.');
     ok(execute(['composer', 'pull-production-accounts', '--', '--dry-run'], $consumer, $environment));
     check(array_slice(invocation($record)['args'], -1)[0] === $consumer . '/site/accounts/', 'Specific Composer shortcut selected the wrong path.');
+    ok(execute(['composer', 'pull-production-logs', '--', '--dry-run'], $consumer, $environment));
+    $logCall = invocation($record);
+    $logOperands = array_slice($logCall['args'], -2);
+    check($logOperands[1] === $consumer . '/site/logs/', 'Logs shortcut selected the wrong local path.');
+    check(str_contains($logOperands[0], 'example.test/site/logs/'), 'Logs shortcut selected the wrong remote path.');
+    check(!in_array('--delete', $logCall['args'], true), 'Logs shortcut must not delete archived files.');
+    $consumerComposer = json_decode(file_get_contents($consumer . '/composer.json'), true, flags: JSON_THROW_ON_ERROR);
+    check(!isset($consumerComposer['scripts']['push-production-logs']), 'Generated a logs push shortcut.');
+    // A shortcut generated by an older release must also be unable to upload logs.
+    $consumerComposer['scripts']['push-production-logs'] = 'site-sync push production logs';
+    file_put_contents($consumer . '/composer.json', json_encode($consumerComposer, JSON_THROW_ON_ERROR));
+    unlink($record);
+    $oldShortcut = execute(['composer', 'push-production-logs', '--', '--dry-run'], $consumer, $environment);
+    check($oldShortcut['code'] !== 0 && str_contains($oldShortcut['stderr'], 'pull only'), 'Legacy logs push shortcut was allowed.');
+    $notCalled();
 
     // Real rsync protocol with a local shell replacing SSH; no network connection.
     $transport = $base . '/local-ssh';
@@ -357,6 +392,31 @@ TRANSPORT);
     check(!file_exists($project . '/first download'), 'Cancelled first pull created missing parents.');
     ok($realRun(['pull', 'production', 'content'], "yes\n"));
     check(file_get_contents($project . '/first download/nested/content/from-remote.txt') === 'remote version', 'First pull did not create and populate its destination.');
+    // Exercise logs with different local/remote paths and automatic first-pull creation.
+    $remoteLogs = $remoteRoot . '/custom logs';
+    mkdir($remoteLogs);
+    file_put_contents($remoteLogs . '/test.log', 'remote log entry');
+    $firstPullConfig['paths']['logs'] = ['local' => 'local logs/files', 'remote' => 'custom logs'];
+    file_put_contents($config, "<?php return " . var_export($firstPullConfig, true) . ";\n");
+    ok($realRun(['pull', 'production', 'logs', '--dry-run']));
+    check(!file_exists($project . '/local logs'), 'Logs preview created directories.');
+    ok($realRun(['pull', 'production', 'logs'], "yes\n"));
+    check(file_get_contents($project . '/local logs/files/test.log') === 'remote log entry', 'Logs pull did not use the configured paths.');
+    file_put_contents($project . '/local logs/files/local.log', 'local log entry');
+    file_put_contents($remoteLogs . '/test.log', 'remote log entry with a new line');
+    ok($realRun(['pull', 'production', 'logs'], "yes\n"));
+    check(file_get_contents($project . '/local logs/files/test.log') === 'remote log entry with a new line', 'Active log was not updated from the server.');
+    check(file_get_contents($project . '/local logs/files/local.log') === 'local log entry', 'Logs pull deleted a local-only file.');
+    unlink($remoteLogs . '/test.log');
+    file_put_contents($remoteLogs . '/next-day.log', 'next day entries');
+    ok($realRun(['pull', 'production', 'logs', '--dry-run']));
+    check(!file_exists($project . '/local logs/files/next-day.log'), 'Logs preview downloaded a file.');
+    ok($realRun(['pull', 'production', 'logs'], "yes\n"));
+    check(file_get_contents($project . '/local logs/files/test.log') === 'remote log entry with a new line', 'Logs pull deleted a rotated log.');
+    check(file_get_contents($project . '/local logs/files/next-day.log') === 'next day entries', 'Logs pull did not add a new log.');
+    $blockedPush = $realRun(['push', 'production', 'logs'], "yes yes yes\n");
+    check($blockedPush['code'] === 1 && str_contains($blockedPush['stderr'], 'pull only'), 'Real logs push was not rejected.');
+    check(!file_exists($remoteLogs . '/local.log'), 'Rejected logs push modified the server directory.');
     echo "PASS: wizard, edit, discovery, Composer proxy, confirmations, dry-run, failures and real rsync transfers.\n";
 } catch (Throwable $error) {
     fwrite(STDERR, 'FAIL: ' . $error->getMessage() . "\n");
