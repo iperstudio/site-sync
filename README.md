@@ -26,8 +26,8 @@ mechanism. No Composer plugin or Kirby plugin installer is required.
 
 ```sh
 vendor/bin/site-sync init
-vendor/bin/site-sync pull production content --dry-run
-vendor/bin/site-sync pull production content
+composer sync pull production content -- --dry-run
+composer pull-production-content
 ```
 
 The setup wizard asks for:
@@ -35,6 +35,7 @@ The setup wizard asks for:
 - Whether to configure production and staging (either or both).
 - SSH host or IP, SSH user and remote project directory for each selected environment.
 - Separate local and remote paths for content and accounts.
+- Whether to add Composer shortcuts (defaults to `yes` when `composer.json` exists).
 
 It previews the configuration before saving `site-sync.php`. Use
 `vendor/bin/site-sync init --edit` to update it; existing values become defaults
@@ -44,6 +45,9 @@ To configure only staging, answer `no` to `Configure production?` and `yes` to
 `Configure staging?`. At least one environment must be configured. During
 `init --edit`, configured environments default to `yes` and absent ones to `no`,
 so you can add production later without changing the staging settings.
+
+Generated configuration uses short PHP array syntax (`[]`). Saving with
+`init --edit` also rewrites older `array (...)` configurations in this format.
 
 Relative remote project directories, such as `example.com`, are interpreted
 relative to the SSH user's home directory. Absolute directories such as
@@ -133,22 +137,48 @@ with `--dry-run` before synchronizing.
 - Cancelling with an explicit response exits successfully; EOF or a failed
   transfer exits with code 1. Rsync errors are printed live, including its exit code.
 
-## Optional Composer aliases
+## Composer shortcuts
 
-Define aliases in your project's `composer.json`:
+When your project has a `composer.json`, `init` asks:
 
-```json
-{
-  "scripts": {
-    "pull-production-content": "site-sync pull production content",
-    "push-production-content": "site-sync push production content"
-  }
-}
+```text
+Add Composer shortcuts? (yes/no) [yes]:
 ```
 
-Then run `composer pull-production-content` or `composer push-production-content`.
-Composer puts dependency binaries on PATH when running root scripts. For large
-transfers, adjust Composer's process timeout or invoke `vendor/bin/site-sync` directly.
+Accept to generate a general `sync` script and named shortcuts for every
+configured environment and path. For example:
+
+```sh
+composer sync -- --help
+composer sync init -- --edit
+composer sync pull staging content -- --dry-run
+composer pull-staging-content
+composer push-staging-accounts
+composer pull-staging-content -- --dry-run
+```
+
+Pass options after `--` so Composer forwards them to Site Sync. Production
+shortcuts are generated only when production is configured, and likewise for staging.
+Custom path names containing characters other than letters, digits, underscores
+or hyphens can be used through `composer sync` but do not get named shortcuts.
+
+To add shortcuts to an already configured project without repeating the wizard:
+
+```sh
+vendor/bin/site-sync aliases
+```
+
+Both `init` and `aliases` accept `--project=/path/to/site`. Existing Composer
+settings and scripts are preserved. If a shortcut name is already in use, Site Sync
+reports the conflict and keeps the existing script. Repeating alias generation
+does not change scripts already generated. Shortcuts are never removed automatically.
+
+If there is no `composer.json`, `init` saves the configuration and skips shortcuts.
+The `aliases` command requires an existing `composer.json` and `site-sync.php`.
+
+Composer puts dependency binaries on PATH when running root scripts. Generated
+shortcuts disable Composer's process timeout for that invocation, allowing long
+transfers. The original `vendor/bin/site-sync` commands remain available.
 
 ## Development
 

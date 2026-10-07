@@ -123,13 +123,18 @@ MOCK);
     ok($run(['init'], $answers));
     $config = $project . '/site-sync.php';
     $original = file_get_contents($config);
-    check(str_contains($original, "'staging' => NULL"), 'Staging should be optional.');
+    check(str_contains($original, "'staging' => null"), 'Staging should be optional.');
+    check(str_contains($original, 'return [') && !str_contains($original, 'array ('), 'Configuration must use short array syntax.');
     check($run(['init'])['code'] === 1, 'init must not overwrite configuration.');
     check(file_get_contents($config) === $original, 'init modified existing configuration.');
     ok($run(['init', '--edit'], str_repeat("\n", 9) . "no\n"));
     check(file_get_contents($config) === $original, 'Declined edit changed configuration.');
     ok($run(['init', '--edit'], str_repeat("\n", 9) . "yes\n"));
     check(file_get_contents($config) === $original, 'Defaults did not preserve configuration.');
+    $legacyConfig = require $config;
+    file_put_contents($config, "<?php return " . var_export($legacyConfig, true) . ";\n");
+    ok($run(['init', '--edit'], str_repeat("\n", 9) . "yes\n"));
+    check(file_get_contents($config) === $original, 'Editing a legacy array() config did not preserve values in short array format.');
     ok($run(['init', '--edit'], str_repeat("\n", 4) . "yes\n127.0.0.2\n\nstaging.test\n" . str_repeat("\n", 4) . "yes\n"));
     // A staging-only project can be created, edited and synchronized without production.
     $stagingProject = $base . '/staging-only';
@@ -158,6 +163,41 @@ MOCK);
     $stagingConfig = require $stagingFile;
     check($stagingConfig['environments']['production']['host'] === '127.0.0.1', 'Could not add production later.');
     check($stagingConfig['environments']['staging']['host'] === '127.0.0.2', 'Adding production changed staging.');
+    // Add aliases to an existing staging-only configuration, preserving unrelated
+    // settings, empty JSON objects and scripts whose names are already occupied.
+    $aliasProject = $base . '/alias-project';
+    mkdir($aliasProject);
+    file_put_contents($aliasProject . '/site-sync.php', $stagingOriginal);
+    $composerOriginal = "{\n  \"name\": \"test/aliases\",\n  \"config\": {},\n  \"scripts\": {\n    \"test\": \"echo original\",\n    \"sync\": \"echo custom sync\",\n    \"pull-staging-content\": \"echo custom pull\"\n  }\n}\n";
+    file_put_contents($aliasProject . '/composer.json', $composerOriginal);
+    ok($run(['aliases'], "no\n", $aliasProject));
+    check(file_get_contents($aliasProject . '/composer.json') === $composerOriginal, 'Declining aliases modified composer.json.');
+    $aliasResult = $run(['aliases'], "\n", $aliasProject);
+    ok($aliasResult);
+    check(str_contains($aliasResult['stdout'], 'Keeping existing Composer script: sync'), 'Alias conflict was not reported.');
+    $aliasSource = file_get_contents($aliasProject . '/composer.json');
+    $aliasComposer = json_decode($aliasSource, false, flags: JSON_THROW_ON_ERROR);
+    check($aliasComposer->config instanceof stdClass, 'Empty JSON object changed type.');
+    check($aliasComposer->scripts->test === 'echo original' && $aliasComposer->scripts->sync === 'echo custom sync', 'Existing scripts were replaced.');
+    check($aliasComposer->scripts->{'pull-staging-content'} === 'echo custom pull', 'Conflicting shortcut was replaced.');
+    check(isset($aliasComposer->scripts->{'push-staging-accounts'}) && !isset($aliasComposer->scripts->{'push-production-accounts'}), 'Shortcuts must match configured environments.');
+    check(str_contains($aliasSource, "\n  \"scripts\""), 'Composer indentation was not preserved.');
+    ok($run(['aliases'], cwd: $aliasProject));
+    check(file_get_contents($aliasProject . '/composer.json') === $aliasSource, 'Alias generation must be idempotent.');
+    // Reject malformed Composer data before changing the existing config.
+    file_put_contents($aliasProject . '/composer.json', '{invalid json');
+    check($run(['init', '--edit'], str_repeat("\n", 10), $aliasProject)['code'] === 1, 'Malformed composer.json was accepted.');
+    check(file_get_contents($aliasProject . '/site-sync.php') === $stagingOriginal, 'Failed alias preparation changed the config.');
+    check(file_get_contents($aliasProject . '/composer.json') === '{invalid json', 'Malformed JSON was overwritten.');
+    // Decline aliases but still save the wizard configuration.
+    file_put_contents($aliasProject . '/composer.json', $composerOriginal);
+    ok($run(['init', '--edit'], str_repeat("\n", 9) . "no\nyes\n", $aliasProject));
+    check(file_get_contents($aliasProject . '/composer.json') === $composerOriginal, 'Wizard ignored declined aliases.');
+    // Scalar strings containing PHP punctuation must survive short-array export.
+    $specialRoot = "site with 'quote and [brackets] array ( and \\slash";
+    ok($run(['init', '--edit'], "no\nyes\n\n\n{$specialRoot}\n" . str_repeat("\n", 4) . "no\nyes\n", $aliasProject));
+    $specialConfig = require $aliasProject . '/site-sync.php';
+    check($specialConfig['environments']['staging']['root'] === $specialRoot, 'Array formatting changed a scalar string.');
     mkdir($project . '/content with spaces');
     mkdir($project . '/site/accounts', 0777, true);
     $nested = $project . '/site/nested';
@@ -228,6 +268,21 @@ MOCK);
     ok($run(['--help'], cwd: $consumer, binary: $proxy));
     ok($run(['pull', 'production', 'content', '--dry-run', '--project=' . $project], cwd: $consumer, binary: $proxy));
     check(array_slice(invocation($record)['args'], -1)[0] === $project . '/content with spaces/', 'Composer proxy selected the wrong root.');
+    file_put_contents($consumer . '/site-sync.php', $original);
+    mkdir($consumer . '/content with spaces');
+    mkdir($consumer . '/site/accounts', 0777, true);
+    // Empty response selects the default yes for Composer shortcuts.
+    ok($run(['init', '--edit'], str_repeat("\n", 10) . "yes\n", $consumer, binary: $proxy));
+    $consumerComposer = json_decode(file_get_contents($consumer . '/composer.json'), true, flags: JSON_THROW_ON_ERROR);
+    check($consumerComposer['scripts']['sync'] === ['Composer\\Config::disableProcessTimeout', 'site-sync'], 'General shortcut not generated.');
+    $consumerConfig = file_get_contents($consumer . '/site-sync.php');
+    $consumerJson = file_get_contents($consumer . '/composer.json');
+    ok($run(['init', '--edit'], str_repeat("\n", 10) . "no\n", $consumer, binary: $proxy));
+    check(file_get_contents($consumer . '/site-sync.php') === $consumerConfig && file_get_contents($consumer . '/composer.json') === $consumerJson, 'Declining save modified a project file.');
+    ok(execute(['composer', 'sync', 'pull', 'production', 'content', '--', '--dry-run'], $consumer, $environment));
+    check(array_slice(invocation($record)['args'], -1)[0] === $consumer . '/content with spaces/', 'General Composer shortcut selected the wrong project.');
+    ok(execute(['composer', 'pull-production-accounts', '--', '--dry-run'], $consumer, $environment));
+    check(array_slice(invocation($record)['args'], -1)[0] === $consumer . '/site/accounts/', 'Specific Composer shortcut selected the wrong path.');
 
     // Real rsync protocol with a local shell replacing SSH; no network connection.
     $transport = $base . '/local-ssh';

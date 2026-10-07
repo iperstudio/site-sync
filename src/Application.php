@@ -25,6 +25,18 @@ final class Application
                 }
                 return $this->init($options);
             }
+            if ($args[0] === 'aliases') {
+                if (count($args) !== 1 || isset($options['edit']) || isset($options['dry-run'])) {
+                    throw new RuntimeException('Usage: site-sync aliases [--project=PATH]');
+                }
+                $root = $this->root($options, true);
+                $source = $this->prepareAliases($root, $this->read($root));
+                if ($source !== null && $this->yesNo('Save Composer shortcuts? (yes/no)', 'yes')) {
+                    $this->writeFile($root . '/composer.json', $source);
+                    echo "Composer shortcuts saved.\n";
+                }
+                return 0;
+            }
             if (count($args) !== 3 || !in_array($args[0], ['pull', 'push'], true) || isset($options['edit'])) {
                 throw new RuntimeException('Usage: site-sync pull|push staging|production TYPE [--dry-run] [--project=PATH]');
             }
@@ -61,6 +73,7 @@ final class Application
 Site Sync — content synchronization over SSH using rsync
 
   site-sync init [--edit] [--project=PATH]
+  site-sync aliases [--project=PATH]
   site-sync pull staging|production TYPE [--dry-run] [--project=PATH]
   site-sync push staging|production TYPE [--dry-run] [--project=PATH]
 
@@ -68,6 +81,7 @@ TYPE is a configured path name, such as content or accounts.
 The directory containing site-sync.php is the project root.
 Without --project, synchronization searches the current directory and its parents.
 init creates a config in the current directory; --edit finds an existing config.
+init offers Composer shortcuts when composer.json exists; aliases adds them later.
 Dry runs preview changes without modifying files or requiring confirmation.
 Actual synchronization uses --delete: destination files absent from the source are removed.
 Production pushes require "yes yes yes"; other operations require "yes".
@@ -123,6 +137,88 @@ HELP;
         return $server;
     }
 
+    private function yesNo(string $question, string $default): bool
+    {
+        $answer = strtolower($this->ask($question, $default));
+        if (!in_array($answer, ['yes', 'no'], true)) {
+            throw new RuntimeException('Expected yes or no.');
+        }
+        return $answer === 'yes';
+    }
+
+    private function exportValue(mixed $value, int $level = 0): string
+    {
+        if (!is_array($value)) {
+            return $value === null ? 'null' : var_export($value, true);
+        }
+        if ($value === []) {
+            return '[]';
+        }
+        $lines = ['['];
+        foreach ($value as $key => $item) {
+            $lines[] = str_repeat('    ', $level + 1) . var_export($key, true)
+                . ' => ' . $this->exportValue($item, $level + 1) . ',';
+        }
+        $lines[] = str_repeat('    ', $level) . ']';
+        return implode("\n", $lines);
+    }
+
+    /** Return a merged Composer file; existing scripts and other settings are preserved. */
+    private function prepareAliases(string $root, array $config): ?string
+    {
+        $file = $root . '/composer.json';
+        if (!is_file($file)) {
+            throw new RuntimeException('No composer.json found in the project.');
+        }
+        $original = file_get_contents($file);
+        $composer = json_decode($original, false, 512, JSON_THROW_ON_ERROR);
+        if (!$composer instanceof \stdClass || (property_exists($composer, 'scripts') && !$composer->scripts instanceof \stdClass)) {
+            throw new RuntimeException('composer.json and its scripts must be JSON objects.');
+        }
+        $composer->scripts ??= new \stdClass();
+        $shortcuts = ['sync' => 'site-sync'];
+        foreach (($config['environments'] ?? []) as $environment => $server) {
+            if (!is_array($server) || !in_array($environment, ['production', 'staging'], true)) {
+                continue;
+            }
+            foreach (array_keys($config['paths'] ?? []) as $type) {
+                // Script names must remain simple command names; arbitrary configured paths
+                // are still available through the general composer sync shortcut.
+                if (!preg_match('/\A[a-zA-Z0-9][a-zA-Z0-9_-]*\z/', (string) $type)) {
+                    echo "Skipping shortcuts for path name: {$type}. Use composer sync instead.\n";
+                    continue;
+                }
+                foreach (['pull', 'push'] as $direction) {
+                    $shortcuts["{$direction}-{$environment}-{$type}"] = "site-sync {$direction} {$environment} " . escapeshellarg((string) $type);
+                }
+            }
+        }
+        $changed = false;
+        foreach ($shortcuts as $name => $command) {
+            $script = ['Composer\\Config::disableProcessTimeout', $command];
+            if (property_exists($composer->scripts, $name)) {
+                if ($composer->scripts->{$name} !== $script) {
+                    echo "Keeping existing Composer script: {$name} (name already in use).\n";
+                }
+                continue;
+            }
+            $composer->scripts->{$name} = $script;
+            echo "Adding Composer shortcut: composer {$name}\n";
+            $changed = true;
+        }
+        if (!$changed) {
+            echo "No Composer shortcuts to add.\n";
+            return null;
+        }
+        $source = json_encode($composer, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+        // Retain the existing indentation convention (otherwise use four spaces).
+        if (preg_match('/^([ \t]+)"/m', $original, $matches)) {
+            $indent = $matches[1];
+            $source = preg_replace_callback('/^( +)/m', fn (array $m): string => str_repeat($indent, intdiv(strlen($m[1]), 4)), $source);
+        }
+        return $source . "\n";
+    }
+
     private function init(array $options): int
     {
         $edit = isset($options['edit']);
@@ -158,12 +254,33 @@ HELP;
             $paths[$name] = ['local' => $local, 'remote' => $remote];
         }
         $config = ['environments' => $environments, 'paths' => $paths];
-        echo "\nConfiguration:\n" . var_export($config, true) . "\n";
+        $composerSource = null;
+        if (is_file($root . '/composer.json')) {
+            if ($this->yesNo('Add Composer shortcuts? (yes/no)', 'yes')) {
+                $composerSource = $this->prepareAliases($root, $config);
+            }
+        } else {
+            echo "No composer.json found; skipping Composer shortcuts.\n";
+        }
+        echo "\nConfiguration:\n" . $this->exportValue($config) . "\n";
         if (strtolower($this->ask($exists ? 'Overwrite site-sync.php? (yes/no)' : 'Save site-sync.php? (yes/no)', 'no')) !== 'yes') {
             echo "Action aborted.\n";
             return 0;
         }
-        $source = "<?php\n\n// Project-specific configuration; SSH authentication uses your existing keys/agent.\nreturn " . var_export($config, true) . ";\n";
+        $source = "<?php\n\n// Project-specific configuration; SSH authentication uses your existing keys/agent.\nreturn " . $this->exportValue($config) . ";\n";
+        $this->writeFile($file, $source);
+        echo "Saved {$file}\n";
+        if ($composerSource !== null) {
+            $this->writeFile($root . '/composer.json', $composerSource);
+            echo "Composer shortcuts saved. Use composer sync or the generated shortcuts.\n";
+        }
+        return 0;
+    }
+
+    private function writeFile(string $file, string $source): void
+    {
+        $root = dirname($file);
+        $exists = file_exists($file);
         if ($exists) {
             // Write next to the config and replace it only once the complete file is ready.
             $temp = tempnam($root, '.site-sync-');
@@ -192,8 +309,6 @@ HELP;
                 fclose($handle);
             }
         }
-        echo "Saved {$file}\n";
-        return 0;
     }
 
     private function validateServer(array $server): void
