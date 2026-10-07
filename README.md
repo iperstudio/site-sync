@@ -1,8 +1,8 @@
 # Site Sync
 
 Interactive PHP CLI for syncing project directories over SSH with rsync. Designed
-for Kirby content, accounts and logs, it also works with other projects without depending
-on Kirby.
+for Kirby content, accounts and logs, it also works with other projects without
+depending on Kirby.
 
 ## Requirements
 
@@ -23,6 +23,9 @@ The package supplies the `vendor/bin/site-sync` command through Composer's `bin`
 mechanism. No Composer plugin or Kirby plugin installer is required.
 
 ## Quick start
+
+Run setup from the project's root directory and accept the Composer shortcuts
+to use the commands below. Configure production, staging or both as needed.
 
 ```sh
 vendor/bin/site-sync init
@@ -57,6 +60,8 @@ Pull commands automatically create missing local destination directories,
 including parent directories, after confirmation. Cancelling a pull or using
 `--dry-run` does not create directories in the project. Push commands require
 the local source directory to exist.
+For pushes, rsync can create the final remote destination directory if its parent
+already exists; missing remote parent directories must be created separately.
 
 ## Commands
 
@@ -64,6 +69,7 @@ the local source directory to exist.
 vendor/bin/site-sync --help
 vendor/bin/site-sync init
 vendor/bin/site-sync init --edit
+vendor/bin/site-sync aliases
 vendor/bin/site-sync pull production content
 vendor/bin/site-sync pull production accounts
 vendor/bin/site-sync pull production logs
@@ -76,7 +82,16 @@ vendor/bin/site-sync push staging content
 Add `--dry-run` to any sync command to preview changes without modifying files.
 Commands require the selected environment to be configured.
 
+| Path name | Default local / remote path | Operations | Files absent from source |
+| --- | --- | --- | --- |
+| `content` | `content` | Pull and push | Deleted at destination |
+| `accounts` | `site/accounts` | Pull and push | Deleted at destination |
+| `logs` | `site/logs` | Pull only | Kept locally |
+
 ## Project discovery and configuration
+
+The configuration file is always **`site-sync.php` in the project's root**. Its
+name and location are fixed; no additional configuration-path option is needed.
 
 Sync commands search for `site-sync.php` in the current directory and then its
 parents. The config's directory is the project root, independently of where the
@@ -117,7 +132,7 @@ Site Sync does not install or load KirbyLog; it synchronizes the configured file
 For existing projects, run `composer sync init -- --edit` (or
 `vendor/bin/site-sync init --edit`) to add the logs paths and accept the Composer
 shortcuts. You can then use `composer pull-staging-logs`,
-`composer pull-production-logs` for the environments you configured.
+or `composer pull-production-logs` for the environments you configured.
 
 Logs support **pull only** and do not use `--delete`: files downloaded earlier
 remain locally even after the server removes or rotates them. Files with matching
@@ -129,8 +144,8 @@ The CLI rejects `push ... logs`, including through an old Composer shortcut.
 Paths must be relative subdirectories without `..`. Local paths and symlinks must
 resolve inside the project. Environments are production and staging; either can
 be `null` when unused. Commands fail if their environment is not configured.
-SSH hosts can be IPv4 addresses or
-hostnames. Connections use the default SSH port; IPv6 and per-environment SSH
+SSH hosts can be IPv4 addresses or hostnames. Connections use the default SSH
+port; IPv6 and per-environment SSH
 options are not currently supported.
 
 The config is executable PHP: use trusted configuration files only. No password
@@ -146,8 +161,7 @@ They show the project, source and destination before confirmation.
 
 For content, accounts and other custom paths, **files absent from the source are
 deleted at the destination** (`--delete`). Logs pulls preserve local files absent
-from the server. Preview changes
-with `--dry-run` before synchronizing.
+from the server. Preview changes with `--dry-run` before synchronizing.
 
 - Normal operations require `yes`.
 - Production pushes require `yes yes yes`. The prompt deliberately still says
@@ -200,6 +214,23 @@ The `aliases` command requires an existing `composer.json` and `site-sync.php`.
 Composer puts dependency binaries on PATH when running root scripts. Generated
 shortcuts disable Composer's process timeout for that invocation, allowing long
 transfers. The original `vendor/bin/site-sync` commands remain available.
+
+## Updating
+
+From the consuming project's root, update this package with:
+
+```sh
+composer update iperstudio/site-sync
+```
+
+Composer selects the newest release allowed by the version constraint in your
+project's `composer.json`. Changing that constraint may be necessary when moving
+to a new major version or, for `0.x` caret constraints, a new minor version.
+
+Updating the package preserves the project's `site-sync.php` and Composer
+shortcuts. Run `composer sync init -- --edit` to configure newly supported paths
+or environments and add their shortcuts. If you did not enable Composer
+shortcuts, use `vendor/bin/site-sync init --edit` instead.
 
 ## Development
 
