@@ -32,13 +32,18 @@ vendor/bin/site-sync pull production content
 
 The setup wizard asks for:
 
-- Production SSH host or IP, SSH user and remote project directory.
-- Optional staging server settings.
+- Whether to configure production and staging (either or both).
+- SSH host or IP, SSH user and remote project directory for each selected environment.
 - Separate local and remote paths for content and accounts.
 
 It previews the configuration before saving `site-sync.php`. Use
 `vendor/bin/site-sync init --edit` to update it; existing values become defaults
 and replacing the file requires confirmation.
+
+To configure only staging, answer `no` to `Configure production?` and `yes` to
+`Configure staging?`. At least one environment must be configured. During
+`init --edit`, configured environments default to `yes` and absent ones to `no`,
+so you can add production later without changing the staging settings.
 
 Relative remote project directories, such as `example.com`, are interpreted
 relative to the SSH user's home directory. Absolute directories such as
@@ -66,7 +71,7 @@ vendor/bin/site-sync push staging content
 ```
 
 Add `--dry-run` to any sync command to preview changes without modifying files.
-Staging commands require staging to be configured.
+Commands require the selected environment to be configured.
 
 ## Project discovery and configuration
 
@@ -100,8 +105,9 @@ Replace the example host and directory with your server settings. Add other name
 paths manually, then use them as the command's final argument.
 
 Paths must be relative subdirectories without `..`. Local paths and symlinks must
-resolve inside the project. Environments are production and staging; staging
-commands fail if staging is not configured. SSH hosts can be IPv4 addresses or
+resolve inside the project. Environments are production and staging; either can
+be `null` when unused. Commands fail if their environment is not configured.
+SSH hosts can be IPv4 addresses or
 hostnames. Connections use the default SSH port; IPv6 and per-environment SSH
 options are not currently supported.
 

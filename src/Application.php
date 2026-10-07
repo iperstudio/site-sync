@@ -134,14 +134,19 @@ HELP;
             throw new RuntimeException('Configuration already exists. Use init --edit to update it.');
         }
         echo "Project: {$root}\n";
-        $production = $this->server('Production', $existing['environments']['production'] ?? []);
-        $staging = null;
-        $answer = strtolower($this->ask('Configure staging? (yes/no)', isset($existing['environments']['staging']) ? 'yes' : 'no'));
-        if (!in_array($answer, ['yes', 'no'], true)) {
-            throw new RuntimeException('Expected yes or no.');
+        $environments = [];
+        foreach (['production', 'staging'] as $environment) {
+            $default = isset($existing['environments'][$environment]) || (!$edit && $environment === 'production') ? 'yes' : 'no';
+            $answer = strtolower($this->ask("Configure {$environment}? (yes/no)", $default));
+            if (!in_array($answer, ['yes', 'no'], true)) {
+                throw new RuntimeException('Expected yes or no.');
+            }
+            $environments[$environment] = $answer === 'yes'
+                ? $this->server(ucfirst($environment), $existing['environments'][$environment] ?? [])
+                : null;
         }
-        if ($answer === 'yes') {
-            $staging = $this->server('Staging', $existing['environments']['staging'] ?? []);
+        if (!array_filter($environments)) {
+            throw new RuntimeException('Configure at least one environment: production or staging.');
         }
         $paths = $existing['paths'] ?? [];
         foreach (['content' => 'content', 'accounts' => 'site/accounts'] as $name => $default) {
@@ -152,7 +157,7 @@ HELP;
             $this->validatePath($remote);
             $paths[$name] = ['local' => $local, 'remote' => $remote];
         }
-        $config = ['environments' => ['production' => $production, 'staging' => $staging], 'paths' => $paths];
+        $config = ['environments' => $environments, 'paths' => $paths];
         echo "\nConfiguration:\n" . var_export($config, true) . "\n";
         if (strtolower($this->ask($exists ? 'Overwrite site-sync.php? (yes/no)' : 'Save site-sync.php? (yes/no)', 'no')) !== 'yes') {
             echo "Action aborted.\n";
