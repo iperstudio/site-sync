@@ -1,0 +1,8 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+// Also works directly from the repository, before Composer installation.
+require_once __DIR__ . '/../src/Application.php';
+exit((new Iperstudio\SiteSync\Application())->run(array_slice($argv, 1)));

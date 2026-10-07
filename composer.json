@@ -1,0 +1,10 @@
+{
+  "name": "iperstudio/site-sync",
+  "description": "Interactive rsync CLI for synchronizing project content and accounts over SSH.",
+  "type": "library",
+  "license": "MIT",
+  "require": { "php": "^8.2" },
+  "autoload": { "psr-4": { "Iperstudio\\SiteSync\\": "src/" } },
+  "bin": ["bin/site-sync"],
+  "scripts": { "test": "@php tests/smoke.php" }
+}
