@@ -250,7 +250,34 @@ MOCK);
     rmdir($project . '/content with spaces');
     check($run(['push', 'production', 'content'], "yes yes yes\n")['code'] === 1, 'Missing source was accepted.');
     $notCalled();
-    mkdir($project . '/content with spaces');
+    ok($run(['pull', 'production', 'content'], "no\n"));
+    $notCalled();
+    check(!file_exists($project . '/content with spaces'), 'Cancelled pull created a directory.');
+    ok($run(['pull', 'production', 'content', '--dry-run']));
+    check(!file_exists($project . '/content with spaces'), 'Preview created a project directory.');
+    $previewTarget = array_slice(invocation($record)['args'], -1)[0];
+    check(!is_dir($previewTarget), 'Temporary preview target was not cleaned up.');
+    $failedPreview = $run(['pull', 'production', 'content', '--dry-run'], extra: ['SYNC_EXIT' => '23']);
+    check($failedPreview['code'] === 1, 'Failed preview returned success.');
+    check(!is_dir(array_slice(invocation($record)['args'], -1)[0]), 'Failed preview leaked its temporary directory.');
+    check(!file_exists($project . '/content with spaces'), 'Failed preview created a project directory.');
+    ok($run(['pull', 'production', 'content'], "yes\n"));
+    check(is_dir($project . '/content with spaces'), 'Confirmed pull did not create its destination.');
+    // Missing nested destinations must be resolved without escaping via ancestors.
+    file_put_contents($config, str_replace("'local' => 'content with spaces'", "'local' => 'new parent/nested content'", $original));
+    ok($run(['pull', 'production', 'content', '--dry-run']));
+    check(!file_exists($project . '/new parent'), 'Nested preview created parent directories.');
+    ok($run(['pull', 'production', 'content'], "yes\n"));
+    check(is_dir($project . '/new parent/nested content'), 'Pull did not create parent directories.');
+    file_put_contents($project . '/blocked', 'a file');
+    symlink($base . '/missing-link-target', $project . '/broken-link');
+    foreach (['blocked/content', 'broken-link/content', 'linked/new-content'] as $blockedPath) {
+        file_put_contents($config, str_replace("'local' => 'content with spaces'", "'local' => '{$blockedPath}'", $original));
+        check($run(['pull', 'production', 'content'], "yes\n")['code'] === 1, 'Pull accepted a blocked or external ancestor.');
+        $notCalled();
+    }
+    check(!file_exists($base . '/outside/new-content'), 'Pull created a directory outside the project.');
+    file_put_contents($config, $original);
 
     // Real Composer bin proxy in a consumer, using an offline path repository.
     $consumer = $base . '/consumer';
@@ -320,6 +347,16 @@ TRANSPORT);
     ok($realRun(['pull', 'production', 'content'], "yes\n"));
     check(file_get_contents($localContent . '/from-remote.txt') === 'remote version', 'Pull did not copy content.');
     check(!file_exists($localContent . '/example.txt'), 'Pull did not delete obsolete content.');
+    // First pull with the real rsync, including several missing local parents.
+    $firstPullConfig = require $config;
+    $firstPullConfig['paths']['content']['local'] = 'first download/nested/content';
+    file_put_contents($config, "<?php return " . var_export($firstPullConfig, true) . ";\n");
+    ok($realRun(['pull', 'production', 'content', '--dry-run']));
+    check(!file_exists($project . '/first download'), 'Real rsync preview created missing parents.');
+    ok($realRun(['pull', 'production', 'content'], "no\n"));
+    check(!file_exists($project . '/first download'), 'Cancelled first pull created missing parents.');
+    ok($realRun(['pull', 'production', 'content'], "yes\n"));
+    check(file_get_contents($project . '/first download/nested/content/from-remote.txt') === 'remote version', 'First pull did not create and populate its destination.');
     echo "PASS: wizard, edit, discovery, Composer proxy, confirmations, dry-run, failures and real rsync transfers.\n";
 } catch (Throwable $error) {
     fwrite(STDERR, 'FAIL: ' . $error->getMessage() . "\n");

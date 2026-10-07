@@ -53,12 +53,10 @@ Relative remote project directories, such as `example.com`, are interpreted
 relative to the SSH user's home directory. Absolute directories such as
 `/home/ploi/example.com` are also accepted. Do not use a `~/` prefix.
 
-Local content directories must already exist. Before a first pull, create the
-empty destination directories:
-
-```sh
-mkdir -p content site/accounts
-```
+Pull commands automatically create missing local destination directories,
+including parent directories, after confirmation. Cancelling a pull or using
+`--dry-run` does not create directories in the project. Push commands require
+the local source directory to exist.
 
 ## Commands
 

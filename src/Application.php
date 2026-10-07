@@ -354,12 +354,9 @@ HELP;
         }
         $this->validatePath($path['local'] ?? null);
         $this->validatePath($path['remote'] ?? null);
-        $local = realpath($root . '/' . $path['local']);
-        if ($local === false || !is_dir($local)) {
-            throw new RuntimeException('Local directory does not exist. Create it before synchronization: ' . $root . '/' . $path['local']);
-        }
-        if (!str_starts_with($local, $root . '/')) {
-            throw new RuntimeException('Local directory must remain inside the project (including symlink targets).');
+        $local = $this->localDirectory($root, $path['local']);
+        if ($direction === 'push' && !is_dir($local)) {
+            throw new RuntimeException('Local source directory does not exist: ' . $local);
         }
         $remotePath = rtrim($server['root'], '/') . '/' . trim($path['remote'], '/') . '/';
         $remoteDisplay = $server['user'] . '@' . $server['host'] . ':' . $remotePath;
@@ -370,6 +367,9 @@ HELP;
         $destination = $direction === 'push' ? $remoteDisplay : $local . '/';
         echo "Project: {$root}\n{$direction} {$environment} {$type}\nSource: {$source}\nDestination: {$destination}\n";
         echo $dryRun ? "Preview only (--dry-run).\n" : "Files absent from source will be deleted at destination (--delete).\n";
+        if ($direction === 'pull' && !is_dir($local)) {
+            echo "Local destination directory will be created when the pull is confirmed.\n";
+        }
         if (!$dryRun) {
             // Keep the deliberate production confirmation behavior of the original scripts.
             $expected = $direction === 'push' && $environment === 'production' ? 'yes yes yes' : 'yes';
@@ -378,25 +378,72 @@ HELP;
                 return 0;
             }
         }
+        if ($direction === 'pull' && !$dryRun && !is_dir($local)) {
+            if (!mkdir($local, 0777, true) && !is_dir($local)) {
+                throw new RuntimeException('Could not create local destination directory: ' . $local);
+            }
+            $local = $this->localDirectory($root, $path['local']);
+        }
+        // Older rsync cannot preview a destination with missing parent directories.
+        // An empty temporary target gives the same first-pull file listing without
+        // creating any directory in the project during a dry run.
+        $previewDirectory = null;
+        $rsyncLocal = $local;
+        if ($direction === 'pull' && $dryRun && !is_dir($local)) {
+            $previewDirectory = sys_get_temp_dir() . '/site-sync-preview-' . bin2hex(random_bytes(8));
+            if (!mkdir($previewDirectory, 0700)) {
+                throw new RuntimeException('Could not create temporary preview directory.');
+            }
+            $rsyncLocal = $previewDirectory;
+        }
         $command = ['rsync', '-axHv', '--itemize-changes', '--progress', '--delete'];
         if ($dryRun) {
             $command[] = '--dry-run';
         }
         $command[] = '--';
-        array_push($command, ...($direction === 'push' ? [$local . '/', $remote] : [$remote, $local . '/']));
+        array_push($command, ...($direction === 'push' ? [$local . '/', $remote] : [$remote, $rsyncLocal . '/']));
         // Explicit remote quoting works with old macOS rsync and modern rsync.
         $environmentVariables = getenv();
         $environmentVariables['RSYNC_OLD_ARGS'] = '1';
         $environmentVariables['RSYNC_PROTECT_ARGS'] = '0';
-        $process = proc_open($command, [0 => STDIN, 1 => STDOUT, 2 => STDERR], $pipes, $root, $environmentVariables);
-        if (!is_resource($process)) {
-            throw new RuntimeException('Could not start rsync.');
-        }
-        $code = proc_close($process);
-        if ($code !== 0) {
-            throw new RuntimeException("rsync failed (exit code: {$code}).");
+        try {
+            $process = proc_open($command, [0 => STDIN, 1 => STDOUT, 2 => STDERR], $pipes, $root, $environmentVariables);
+            if (!is_resource($process)) {
+                throw new RuntimeException('Could not start rsync.');
+            }
+            $code = proc_close($process);
+            if ($code !== 0) {
+                throw new RuntimeException("rsync failed (exit code: {$code}).");
+            }
+        } finally {
+            if ($previewDirectory !== null) {
+                rmdir($previewDirectory);
+            }
         }
         echo $dryRun ? "Preview completed.\n" : "Synchronization completed.\n";
         return 0;
+    }
+
+    /** Resolve existing ancestors before allowing creation of missing directories. */
+    private function localDirectory(string $root, string $relative): string
+    {
+        $local = $root;
+        foreach (explode('/', $relative) as $component) {
+            if ($component === '' || $component === '.') {
+                continue;
+            }
+            $local .= '/' . $component;
+            if (file_exists($local) || is_link($local)) {
+                $resolved = realpath($local);
+                if ($resolved === false || !is_dir($resolved)) {
+                    throw new RuntimeException('Local path is not a usable directory: ' . $local);
+                }
+                $local = $resolved;
+            }
+            if (!str_starts_with($local, $root . '/')) {
+                throw new RuntimeException('Local directory must remain inside the project (including symlink targets).');
+            }
+        }
+        return $local;
     }
 }
